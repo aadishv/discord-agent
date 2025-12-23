@@ -1,0 +1,12 @@
+[project]
+name = "chinese-discord"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "hikari>=2.5.0",
+    "langchain-text-splitters>=1.1.0",
+    "lmdb>=1.7.5",
+    "pydantic-ai>=1.37.0",
+    "python-dotenv>=1.2.1",
+]
