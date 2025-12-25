@@ -5,7 +5,7 @@ import struct
 import asyncio
 import hikari
 import lmdb
-from pydantic_ai import Agent, ModelRequest, ModelResponse, ModelMessagesTypeAdapter, UserContent, BinaryContent, capture_run_messages
+from pydantic_ai import Agent, ModelRequest, ModelResponse, ModelMessagesTypeAdapter, UserContent, BinaryContent, PartEndEvent, TextPart, AgentRunResultEvent, AgentRunResult
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 IMAGE_MEDIA_TYPES = [
@@ -36,6 +36,8 @@ class DiscordAgentContext[UserData]:
     trigger: hikari.MessageCreateEvent
 
 class DiscordAgent[UserData]:
+    agent: Agent[DiscordAgentContext[UserData], str]
+
     def __init__(self, agent: Agent[DiscordAgentContext[UserData], str], initial_context: UserData, db_path="threads.db"):
         self.agent = agent
 
@@ -43,24 +45,16 @@ class DiscordAgent[UserData]:
         self.thread_user_kv = self.db.open_db(b"user")
         self.thread_contents_kv = self.db.open_db(b"contents")
 
-        self.active_streams: dict[hikari.Snowflake, asyncio.Task] = {}
+        # thread: queue of messages (first is the next in the list)
+        self.active_streams: dict[hikari.Snowflake, list[hikari.MessageCreateEvent]] = {}
 
         self.user_data = initial_context
 
     def update_context(self, user_data: UserData):
         self.user_data = user_data
 
-    async def respond_to_message(self, event: hikari.MessageCreateEvent, thread: hikari.GuildThreadChannel, info_message: hikari.Message):
-        user = event.message
-
-        # synchronous input procressing
-        key = struct.pack(">Q", thread.id)
-
-        with self.db.begin() as txn:
-            raw_message_history: bytes | None = txn.get(key, db=self.thread_contents_kv)
-
-        message_history: list[ModelRequest | ModelResponse] | None = ModelMessagesTypeAdapter.validate_json(raw_message_history.decode('utf-8')) if raw_message_history else None
-
+    # input + ignored attachments
+    async def _parse_message(self, user: hikari.Message) -> tuple[list[UserContent], list[str]]:
         user_message: list[UserContent] = [
             user.content if user.content else "[No text provided by user]",
         ]
@@ -75,37 +69,73 @@ class DiscordAgent[UserData]:
             else:
                 ignored_attachments.append(attachment.filename)
 
-        start_time = time.time()
+        return user_message, ignored_attachments
 
-        # periodically updates start message w/ info
-        async def reporter():
-            try:
-                while True:
-                    msg = "warning: ignoring following attachments due to invalid type: {}\n".format(', '.join(ignored_attachments)) if ignored_attachments else ""
-                    msg += f"info: thinking for {int(time.time() - start_time)}s"
-                    await info_message.edit(msg)
-                    await asyncio.sleep(1.0)
-            except asyncio.CancelledError as e:
-                msg = f"info: thought for {int(time.time() - start_time)}s\n" + str(e)
-                await info_message.edit(msg)
+    async def respond_to_message(self, event: hikari.MessageCreateEvent, thread: hikari.GuildThreadChannel, info_message: hikari.Message):
+        # synchronous input procressing
+        key = struct.pack(">Q", thread.id)
 
-        report = asyncio.create_task(reporter())
-        with capture_run_messages() as messages:
-            try:
-                async with thread.trigger_typing():
-                    res = await self.agent.run(user_message, deps=DiscordAgentContext(self.user_data, thread, event), message_history=message_history)
+        with self.db.begin() as txn:
+            raw_message_history: bytes | None = txn.get(key, db=self.thread_contents_kv)
 
-                    for chunk in md_splitter.split_text(res.output):
+        message_history: list[ModelRequest | ModelResponse] = ModelMessagesTypeAdapter.validate_json(raw_message_history.decode('utf-8')) if raw_message_history else []
+
+        try:
+            # periodically updates start message w/ info
+            all_ignored_attachments = []
+            cost: str | None = None
+            start_time = time.time()
+            async def reporter(done=False):
+                def build_msg():
+                    msg = "warning: ignoring following attachments due to invalid type: {}\n".format(', '.join(all_ignored_attachments)) if all_ignored_attachments else ""
+                    msg += f"info: {'working' if not done else 'worked'} for {int(time.time() - start_time)}s"
+                    if cost:
+                        msg += f"\ninfo: cost ${cost}"
+                    if thread.id in self.active_streams and self.active_streams[thread.id]:
+                        msg += f"\ninfo: {len(self.active_streams[thread.id])} queued messages"
+                    return msg
+                try:
+                    while True:
+                        print("running")
+                        await info_message.edit(build_msg())
+                        await asyncio.sleep(1.0)
+                except asyncio.CancelledError:
+                    await info_message.edit(build_msg())
+                except Exception as e:
+                    print("exception occured in reporter: ", e)
+            report = asyncio.create_task(reporter())
+
+            current_message = event.message
+
+            while True:
+                user_message, new_ignored_attachments = await self._parse_message(current_message)
+                all_ignored_attachments = all_ignored_attachments + new_ignored_attachments
+
+                res: AgentRunResult | None = None
+                async for chunk in self.agent.run_stream_events(user_message, deps=DiscordAgentContext(self.user_data, thread, event), message_history=message_history):
+                    print(chunk)
+                    if isinstance(chunk, AgentRunResultEvent):
+                        cost = str(chunk.result.response.cost().total_price)
+                        res = chunk.result
+                    if not isinstance(chunk, PartEndEvent):
+                        continue
+                    if not isinstance(chunk.part, TextPart):
+                        continue
+                    for chunk in md_splitter.split_text(chunk.part.content):
                         await thread.send(chunk)
+                if res:
+                    message_history = res.all_messages()
+                if self.active_streams[thread.id]:
+                    current_message = self.active_streams[thread.id].pop(0).message
+                else:
+                    break
+        finally:
+            del self.active_streams[thread.id]
+            report.cancel()
+            with self.db.begin(write=True) as txn:
+                txn.put(key, to_json(message_history), db=self.thread_contents_kv)
 
-                    report.cancel(f"info: cost ${res.response.cost().total_price}")
-            except asyncio.CancelledError:
-                report.cancel("[interrupted]")
-            except Exception as e:
-                print("Error occured in respond_to_message:", e)
-            finally:
-                with self.db.begin(write=True) as txn:
-                    txn.put(key, to_json(messages), db=self.thread_contents_kv)
+
 
     async def message_create_handler(self, event: hikari.MessageCreateEvent, bot: hikari.GatewayBot) -> None:
         if not event.is_human:
@@ -158,19 +188,21 @@ class DiscordAgent[UserData]:
                 return
 
         if thread.id in self.active_streams:
-            self.active_streams[thread.id].cancel()
-            try:
-                await self.active_streams[thread.id]
-            except asyncio.CancelledError:
-                pass
+            self.active_streams[thread.id].append(event)
+            return
 
         start_message = await thread.send("starting...")
-        self.active_streams[thread.id] = asyncio.create_task(
-            self.respond_to_message(event, thread, start_message)
-        )
+
+        self.active_streams[thread.id] = []
+        async with thread.trigger_typing():
+            await self.respond_to_message(event, thread, start_message)
 
     def register(self, bot: hikari.GatewayBot):
-        print("yo")
+        async def reporter():
+            while True:
+                await asyncio.sleep(1)
+                print(self.active_streams)
+        asyncio.create_task(reporter())
         @bot.listen()
         async def callback(event: hikari.MessageCreateEvent):
             print(event.message.content)
