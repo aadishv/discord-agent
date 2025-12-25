@@ -1,0 +1,4 @@
+{
+  "image": "mcr.microsoft.com",
+  "postCreateCommand": "pip install uv"
+}
