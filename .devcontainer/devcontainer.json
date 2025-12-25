@@ -1,4 +1,8 @@
 {
-  "image": "mcr.microsoft.com",
-  "postCreateCommand": "pip install uv"
+  "name": "Temporal Python Project",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "features": {
+    "ghcr.io/astral-sh/uv:1": {}
+  },
+  "postCreateCommand": "uv sync"
 }
