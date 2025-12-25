@@ -96,7 +96,6 @@ class DiscordAgent[UserData]:
                     return msg
                 try:
                     while True:
-                        print("running")
                         await info_message.edit(build_msg())
                         await asyncio.sleep(1.0)
                 except asyncio.CancelledError:
@@ -113,7 +112,6 @@ class DiscordAgent[UserData]:
 
                 res: AgentRunResult | None = None
                 async for chunk in self.agent.run_stream_events(user_message, deps=DiscordAgentContext(self.user_data, thread, event), message_history=message_history):
-                    print(chunk)
                     if isinstance(chunk, AgentRunResultEvent):
                         cost = str(chunk.result.response.cost().total_price)
                         res = chunk.result
@@ -188,6 +186,7 @@ class DiscordAgent[UserData]:
                 return
 
         if thread.id in self.active_streams:
+            print("adding to queue")
             self.active_streams[thread.id].append(event)
             return
 
@@ -198,11 +197,6 @@ class DiscordAgent[UserData]:
             await self.respond_to_message(event, thread, start_message)
 
     def register(self, bot: hikari.GatewayBot):
-        async def reporter():
-            while True:
-                await asyncio.sleep(1)
-                print(self.active_streams)
-        asyncio.create_task(reporter())
         @bot.listen()
         async def callback(event: hikari.MessageCreateEvent):
             print(event.message.content)

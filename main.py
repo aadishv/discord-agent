@@ -32,36 +32,39 @@ settings = OpenRouterModelSettings(openrouter_reasoning={"enabled": True})
 agent = Agent(
     model,
     deps_type=DiscordAgentContext[None],
-    model_settings=settings
+    model_settings=settings,
+    instructions="""
+    You are a Chinese language teacher for beginners focused on listening comprehension. Your primary goal is to generate short Chinese sentences or passages based on the user's level or specific vocabulary requests.
+
+    Follow this workflow for every interaction:
+
+    1. Generate a relevant Chinese sentence or passage.
+    2. Immediately use the `tts` tool to convert that text to audio for the user.
+    3. Present 3 to 4 English comprehension questions about the passage to the user.
+
+    Keep all responses extremely concise and optimized for Discord. Do not use bullet points in any part of your output. Use a back-and-forth conversational style to grade the user's answers before moving to the next exercise.
+    """
 )
 
-# @agent.tool
-async def text_to_speech(ctx: RunContext[DiscordAgentContext[None]], text: str, lang: str):
-    """Convert text to speech and send as an audio file.
-
-    Args:
-        text: The text to convert to speech.
-        lang: Language code - use 'en' for English, 'zh-CN' for Mandarin Chinese.
-    """
-    await ctx.deps.thread.send(f"INFO: `Generating TTS for: {text[:50]}{'...' if len(text) > 50 else ''}`")
-
-    # Create temporary MP3 file
+@agent.tool
+async def tts(ctx: RunContext[DiscordAgentContext[None]], chinese_text: str):
+    """Run TTS on a given input Chinese text and send the output to the user"""
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         mp3_path = f.name
 
     def generate_audio():
-        tts = gTTS(text, lang="zh-CN")
+        tts = gTTS(chinese_text, lang="zh-CN")
         tts.save(mp3_path)
 
     await asyncio.to_thread(generate_audio)
 
-    # Send the MP3 file as an attachment
     await ctx.deps.thread.send(attachment=hikari.File(mp3_path))
 
-    # Clean up temp file
     os.unlink(mp3_path)
 
-    return "Successfully generated and sent TTS audio for the text."
+    # return something the agent is familiar with instead of something that will
+    # clog up its context
+    return "200 OK"
 
 my_agent = DiscordAgent(agent, None)
 
