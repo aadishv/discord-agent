@@ -2,7 +2,9 @@
 
 A minimal, typesafe, and modular library which allows anyone to build AI agents that run in a Discord server using Hikari and Pydantic AI. Set up the bot to run in a server, after which it will monitor for messages from users and respond to them in a thread. Also supports built-in thread and user storage via a (somewhat) configurable file-based KV store. Bring your own model, tools, etc..
 
-The library itself is in `agent.py` and is less than 200 lines. This has no license so do wtv with it!!
+The library itself is in `agent.py` and only about 200 lines. This has no license so do wtv with it!!
+
+There's also a Chinese teacher agent in `main.py`, which is what I initially set out to build. Thanks to the abstractions provided by the agent module, the whole thing is <100 LOC.
 
 ## More modularity stuff to do
 
