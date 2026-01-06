@@ -6,9 +6,16 @@ The library itself is in `agent.py` and only about 200 lines. This has no licens
 
 There's also a Chinese teacher agent in `main.py`, which is what I initially set out to build. Thanks to the abstractions provided by the agent module, the whole thing is <100 LOC.
 
+## Chinese agent TODOs
+
+* test out more models
+* improve conversational flow
+* encourage model to use longer passages, e.g. 2-3 sentences
+
 ## More modularity stuff to do
 
 * make the KV backend configurable using a `typing.Protocol`
+* fix persistence of image-based chats
 * allow users to configure when to respond to messages (this won't be fun because we do a lot of silly logic)
 * add minimal support for streaming[^streaming]
 * support for structured outputs -> custom UI? might be outside the scope of this library though
